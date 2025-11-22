@@ -124,13 +124,28 @@ jobs:
             LATEST_COMMIT="${{ github.event.head_commit.id }}"
             COMMIT_URL="https://github.com/$REPO/commit/$LATEST_COMMIT"
 
-            # Build commit summary from all commits
-            COMMITS_SUMMARY=$(echo "$COMMITS_JSON" | jq -r '.[] | "• [`" + (.id[:7]) + "`](https://github.com/${{ github.repository }}/commit/" + .id + ") " + (.message | gsub("\n"; " | "))' | head -c 1500)
+            # Build commit summary: single-line commits first, then multi-line commits
+            # Separate single-line and multi-line commits
+            SINGLE_LINE=$(echo "$COMMITS_JSON" | jq -r '.[] | select((.message | split("\n") | length) == 1) | "• [`" + (.id[:7]) + "`](https://github.com/${{ github.repository }}/commit/" + .id + ") " + .message')
+            MULTI_LINE=$(echo "$COMMITS_JSON" | jq -r '.[] | select((.message | split("\n") | length) > 1) | 
+              "• [`" + (.id[:7]) + "`](https://github.com/${{ github.repository }}/commit/" + .id + ") " + (.message | split("\n")[0]) + "\n" + 
+              ((.message | split("\n")[1:]) | map("  " + .) | join("\n"))')
+            
+            # Combine: single-line first, then multi-line, limit total size
+            if [ -n "$SINGLE_LINE" ] && [ -n "$MULTI_LINE" ]; then
+              COMMITS_SUMMARY=$(printf "%s\n\n%s" "$SINGLE_LINE" "$MULTI_LINE" | head -c 2000)
+            elif [ -n "$SINGLE_LINE" ]; then
+              COMMITS_SUMMARY=$(echo "$SINGLE_LINE" | head -c 2000)
+            elif [ -n "$MULTI_LINE" ]; then
+              COMMITS_SUMMARY=$(echo "$MULTI_LINE" | head -c 2000)
+            else
+              COMMITS_SUMMARY=""
+            fi
 
             if [ "$COMMITS_COUNT" -eq 1 ]; then
               DESCRIPTION="**Commits:** 1\n**Pusher:** $PUSHER\n**Repository:** [$REPO]($REPO_URL)\n\n$COMMITS_SUMMARY"
             else
-              DESCRIPTION="**Commits:** $COMMITS_COUNT\n**Pusher:** $PUSHER\n**Repository:** [$REPO]($REPO_URL)\n\n**Commit Summary:**\n$COMMITS_SUMMARY"
+              DESCRIPTION="**Commits:** $COMMITS_COUNT\n**Pusher:** $PUSHER\n**Repository:** [$REPO]($REPO_URL)\n\n$COMMITS_SUMMARY"
             fi
             URL="$COMMIT_URL"
 
