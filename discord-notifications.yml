@@ -125,7 +125,7 @@ jobs:
             COMMIT_URL="https://github.com/$REPO/commit/$LATEST_COMMIT"
 
             # Build commit summary from all commits
-            COMMITS_SUMMARY=$(echo "$COMMITS_JSON" | jq -r '.[] | "• [`" + (.id[:7]) + "`](https://github.com/${{ github.repository }}/commit/" + .id + ") " + (.message | split("\n")[0])' | head -c 1500)
+            COMMITS_SUMMARY=$(echo "$COMMITS_JSON" | jq -r '.[] | "• [`" + (.id[:7]) + "`](https://github.com/${{ github.repository }}/commit/" + .id + ") " + (.message | gsub("\n"; " | "))' | head -c 1500)
 
             if [ "$COMMITS_COUNT" -eq 1 ]; then
               DESCRIPTION="**Commits:** 1\n**Pusher:** $PUSHER\n**Repository:** [$REPO]($REPO_URL)\n\n$COMMITS_SUMMARY"
