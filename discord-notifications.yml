@@ -41,11 +41,11 @@ jobs:
     steps:
       - name: Checkout repository
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Send Discord Notification
+      - name: Send Discord and Slack Notifications
         env:
           PR_TITLE_JSON: ${{ toJSON(github.event.pull_request.title) }}
           PR_BODY_JSON: ${{ toJSON(github.event.pull_request.body) }}
@@ -56,6 +56,7 @@ jobs:
           COMMIT_MESSAGE_JSON: ${{ toJSON(github.event.head_commit.message) }}
           COMMITS_JSON: ${{ toJSON(github.event.commits) }}
           DISCORD_WEBHOOK_URL: ${{ secrets[vars.DISCORD_WEBHOOK_SECRET_NAME || 'DISCORD_WEBHOOK_URL'] }}
+          SLACK_WEBHOOK_URL: ${{ secrets[vars.SLACK_WEBHOOK_SECRET_NAME || 'SLACK_WEBHOOK_URL'] }}
         run: |
           # Set variables
           EVENT_TYPE="${{ github.event_name }}"
@@ -234,8 +235,107 @@ jobs:
               }]
             }')
           
-          # Send to Discord
-          curl -X POST \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            "$DISCORD_WEBHOOK_URL"
+          # Send to Discord (if configured)
+          if [ -n "$DISCORD_WEBHOOK_URL" ] && [ "$DISCORD_WEBHOOK_URL" != "" ]; then
+            curl -X POST \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD" \
+              "$DISCORD_WEBHOOK_URL" || echo "Failed to send Discord notification"
+          fi
+          
+          # Send to Slack (if configured)
+          if [ -n "$SLACK_WEBHOOK_URL" ] && [ "$SLACK_WEBHOOK_URL" != "" ]; then
+            # Convert Discord embed format to Slack format
+            SLACK_TITLE=$(echo "$PAYLOAD" | jq -r '.embeds[0].title // "GitHub Event"')
+            SLACK_DESCRIPTION=$(echo "$PAYLOAD" | jq -r '.embeds[0].description // ""')
+            SLACK_URL=$(echo "$PAYLOAD" | jq -r '.embeds[0].url // ""')
+            
+            # Convert markdown to Slack mrkdwn format
+            # **bold** -> *bold*, `code` stays as `code`, [text](url) -> <url|text>
+            # Handle escaped newlines - convert \n to actual newlines
+            SLACK_DESCRIPTION_FORMATTED=$(echo -e "$SLACK_DESCRIPTION" | \
+              sed 's/\\n/\n/g' | \
+              sed 's/\*\*\([^*]*\)\*\*/*\1*/g' | \
+              sed 's/\[\([^]]*\)](\([^)]*\))/<\2|\1>/g')
+            
+            # Build Slack message with proper formatting using Block Kit for better appearance
+            # Determine color based on action (matching Discord colors)
+            if [ "$ACTION" = "opened" ]; then
+              SLACK_COLOR="#3498DB"  # Blue
+            elif [ "$ACTION" = "closed" ] || [ "${{ github.event.pull_request.merged }}" = "true" ]; then
+              SLACK_COLOR="#57F287"  # Green
+            elif [ "$ACTION" = "reopened" ]; then
+              SLACK_COLOR="#FEE75C"  # Yellow
+            else
+              SLACK_COLOR="#5865F2"  # Blurple
+            fi
+            
+            # Build Slack Block Kit payload for rich formatting
+            # Start with base blocks
+            SLACK_BLOCKS_BASE=$(jq -n \
+              --arg title "$SLACK_TITLE" \
+              --arg description "$SLACK_DESCRIPTION_FORMATTED" \
+              --arg timestamp "$TIMESTAMP" \
+              '{
+                blocks: [
+                  {
+                    type: "header",
+                    text: {
+                      type: "plain_text",
+                      text: $title,
+                      emoji: true
+                    }
+                  },
+                  {
+                    type: "section",
+                    text: {
+                      type: "mrkdwn",
+                      text: $description
+                    }
+                  },
+                  {
+                    type: "context",
+                    elements: [
+                      {
+                        type: "image",
+                        image_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+                        alt_text: "GitHub"
+                      },
+                      {
+                        type: "mrkdwn",
+                        text: ("GitHub • " + $timestamp)
+                      }
+                    ]
+                  }
+                ]
+              }')
+            
+            # Add button if URL exists
+            if [ -n "$SLACK_URL" ] && [ "$SLACK_URL" != "null" ] && [ "$SLACK_URL" != "" ]; then
+              SLACK_BLOCKS=$(echo "$SLACK_BLOCKS_BASE" | jq \
+                --arg url "$SLACK_URL" \
+                '.blocks += [{
+                  type: "actions",
+                  elements: [
+                    {
+                      type: "button",
+                      text: {
+                        type: "plain_text",
+                        text: "View on GitHub",
+                        emoji: true
+                      },
+                      url: $url,
+                      style: "primary"
+                    }
+                  ]
+                }]')
+            else
+              SLACK_BLOCKS="$SLACK_BLOCKS_BASE"
+            fi
+            
+            # Send to Slack using Block Kit for rich formatting
+            curl -X POST \
+              -H "Content-Type: application/json" \
+              -d "$SLACK_BLOCKS" \
+              "$SLACK_WEBHOOK_URL" || echo "Failed to send Slack notification"
+          fi
